@@ -1,0 +1,21 @@
+{
+  "name": "splunkprov2-cookie-refresher",
+  "version": "1.0.0",
+  "description": "SplunkProV2 Cookie Refresher - Roblox Cookie Management Tool",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node server.js"
+  },
+  "keywords": [
+    "roblox",
+    "cookie",
+    "refresher"
+  ],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "express": "^4.18.2",
+    "node-fetch": "^2.7.0"
+  }
+}
